@@ -57,12 +57,21 @@ def get_model():
             # Forzar recolección de basura antes de cargar
             gc.collect()
             logger.info("📦 Cargando modelo 'allmini'...")
-            _modelo = SentenceTransformer('paraphrase-MiniLM-L3-v2')
-            logger.info("✅ Modelo cargado exitosamente")
-        except Exception as e:
-            logger.error(f"❌ Error CRÍTICO cargando el modelo: {e}", exc_info=True)
-            raise e
+
+
+           # --- CARGA DIFERIDA DEL MODELO ULTRA LIGERO ---
+_modelo = None
+
+def get_model():
+    global _modelo
+    if _modelo is None:
+        logger.info("🔄 Cargando modelo MiniLM L3 de 60MB...")
+        # Forzar recolección de basura antes de cargar
+        gc.collect()
+        _modelo = SentenceTransformer('paraphrase-MiniLM-L3-v2')
+        logger.info("✅ Modelo L3 cargado correctamente")
     return _modelo
+
 
 # Cargar el modelo al arrancar la app (para que falle rápido si no puede)
 logger.info("🔄 Iniciando carga preventiva del modelo...")
