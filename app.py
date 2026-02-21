@@ -56,8 +56,8 @@ def get_model():
         try:
             # Forzar recolección de basura antes de cargar
             gc.collect()
-            logger.info("📦 Cargando modelo 'hiiamsid/sentence_similarity_spanish_es'...")
-            _modelo = SentenceTransformer('hiiamsid/sentence_similarity_spanish_es')
+            logger.info("📦 Cargando modelo 'allmini'...")
+            _modelo = SentenceTransformer('all-MiniLM-L6-v2')  # Solo 80 MB
             logger.info("✅ Modelo cargado exitosamente")
         except Exception as e:
             logger.error(f"❌ Error CRÍTICO cargando el modelo: {e}", exc_info=True)
