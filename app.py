@@ -8,6 +8,7 @@ from openai import OpenAI
 from sentence_transformers import SentenceTransformer
 import logging
 import httpx
+import gc
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -18,15 +19,14 @@ load_dotenv()
 
 # Inicializar Flask
 app = Flask(__name__)
-CORS(app)  # Permitir peticiones desde cualquier dominio
+CORS(app)
 
 # Configuración
 API_KEY = os.getenv("OPENAI_API_KEY")
 if not API_KEY:
     logger.error("No se encuentra la API key de OpenAI")
-    # No salimos porque Render necesita arrancar
 
-# Inicializar OpenAI (con configuración para Render)
+# Inicializar OpenAI
 http_client = httpx.Client(
     base_url="https://api.openai.com/v1",
     follow_redirects=True,
@@ -34,13 +34,23 @@ http_client = httpx.Client(
 )
 cliente = OpenAI(api_key=API_KEY, http_client=http_client)
 
-# Cargar modelo de embeddings (esto puede tomar unos segundos)
-logger.info("Cargando modelo de embeddings...")
-modelo_embeddings = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
-logger.info("Modelo cargado")
+# --- CARGA DIFERIDA DEL MODELO PARA AHORRAR MEMORIA ---
+_modelo = None
 
-# Cargar fragmentos y embeddings
+def get_model():
+    """Carga el modelo de embeddings solo cuando es necesario."""
+    global _modelo
+    if _modelo is None:
+        logger.info("Cargando modelo de embeddings en español...")
+        # Modelo pequeño y eficaz para español
+        _modelo = SentenceTransformer('hiiamsid/sentence_similarity_spanish_es')
+        logger.info("Modelo cargado correctamente")
+    return _modelo
+
+# --- CARGA DE LOS .PKL (FRAGMENTOS Y EMBEDDINGS) ---
 logger.info("Cargando datos del asistente...")
+fragmentos = []
+embeddings = []
 try:
     with open("fragmentos.pkl", "rb") as f:
         fragmentos = pickle.load(f)
@@ -49,18 +59,19 @@ try:
     logger.info(f"Datos cargados: {len(fragmentos)} fragmentos")
 except Exception as e:
     logger.error(f"Error cargando datos: {e}")
-    fragmentos = []
-    embeddings = []
 
-# Función para buscar fragmentos relevantes
+# --- FUNCIÓN DE BÚSQUEDA SEMÁNTICA ---
 def buscar_fragmentos(pregunta, top_k=3):
     if not fragmentos or len(embeddings) == 0:
         return []
     
-    # Crear embedding de la pregunta
-    embedding_pregunta = modelo_embeddings.encode(pregunta)
+    # Obtener el modelo (se carga aquí la primera vez)
+    modelo = get_model()
     
-    # Calcular similitudes
+    # Crear embedding de la pregunta
+    embedding_pregunta = modelo.encode(pregunta)
+    
+    # Calcular similitudes (producto punto, asumiendo embeddings normalizados)
     similitudes = []
     for i, emb in enumerate(embeddings):
         similitud = np.dot(embedding_pregunta, emb) / (np.linalg.norm(embedding_pregunta) * np.linalg.norm(emb))
@@ -72,11 +83,13 @@ def buscar_fragmentos(pregunta, top_k=3):
     # Devolver los top_k fragmentos
     return [fragmentos[i] for i, _ in similitudes[:min(top_k, len(similitudes))]]
 
+# --- RUTAS DE LA API ---
+
 @app.route('/', methods=['GET'])
 def home():
     return jsonify({
         "status": "online",
-        "message": "Asistente Opositores API",
+        "message": "Asistente Opositores API (Embeddings español)",
         "fragmentos_cargados": len(fragmentos)
     })
 
@@ -97,7 +110,7 @@ def chat():
         if not fragmentos_relevantes:
             return jsonify({"respuesta": "No encontré información relevante en los documentos."})
         
-        # Crear contexto
+        # Crear contexto con los fragmentos más relevantes
         contexto = "\n\n---\n\n".join(fragmentos_relevantes)
         
         # Consultar a OpenAI
@@ -113,13 +126,16 @@ def chat():
         
         respuesta_texto = respuesta.choices[0].message.content
         
+        # Limpieza de memoria (opcional)
+        gc.collect()
+        
         return jsonify({
             "respuesta": respuesta_texto,
             "fragmentos_usados": len(fragmentos_relevantes)
         })
         
     except Exception as e:
-        logger.error(f"Error: {e}")
+        logger.error(f"Error en /chat: {e}")
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
