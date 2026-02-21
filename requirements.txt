@@ -5,7 +5,10 @@ flask-cors==4.0.0
 python-dotenv==1.0.0
 openai==1.6.1
 sentence-transformers==2.2.2
+huggingface-hub==0.16.4
 numpy==1.24.3
 httpx==0.25.1
 gunicorn==21.2.0
 chardet==5.2.0
+torch==2.0.1
+transformers==4.30.2
