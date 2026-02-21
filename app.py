@@ -21,16 +21,12 @@ load_dotenv()
 # Inicializar Flask
 app = Flask(__name__)
 # Configuración CORS
-CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
-logger.info("✅ CORS configurado para permitir cualquier origen")
 
-# Añadir cabeceras CORS manualmente
-@app.after_request
-def after_request(response):
-    response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
-    return response
+
+# Configuración CORS ultra simple
+CORS(app)  # Sin opciones, la configuración por defecto
+logger.info("✅ CORS configurado en modo simple")
+
 
 # Configuración
 API_KEY = os.getenv("OPENAI_API_KEY")
@@ -142,15 +138,9 @@ def debug():
 
 @app.route('/chat', methods=['POST', 'OPTIONS'])
 def chat():
-    """Endpoint principal para el chat."""
-    # Manejar preflight OPTIONS para CORS
+    # Manejar preflight OPTIONS - respuesta mínima
     if request.method == 'OPTIONS':
-        response = jsonify({"status": "ok"})
-        response.headers.add("Access-Control-Allow-Origin", "*")
-        response.headers.add("Access-Control-Allow-Headers", "Content-Type")
-        response.headers.add("Access-Control-Allow-Methods", "POST")
-        return response
-
+        return '', 200  # Respuesta vacía con código 200 es suficiente
     try:
         # Forzar limpieza de memoria antes de procesar
         gc.collect()
