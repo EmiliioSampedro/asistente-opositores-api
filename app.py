@@ -20,15 +20,22 @@ load_dotenv()
 
 # Inicializar Flask
 app = Flask(__name__)
-# CORS más explícito: permite cualquier origen (para desarrollo)
+# Configuración CORS
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 logger.info("✅ CORS configurado para permitir cualquier origen")
+
+# Añadir cabeceras CORS manualmente
+@app.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    return response
 
 # Configuración
 API_KEY = os.getenv("OPENAI_API_KEY")
 if not API_KEY:
     logger.error("❌ No se encuentra la API key de OpenAI")
-    # No salimos porque Render necesita arrancar, pero la app fallará en /chat
 else:
     logger.info("✅ API key de OpenAI encontrada")
 
@@ -45,42 +52,23 @@ except Exception as e:
     logger.error(f"❌ Error inicializando OpenAI: {e}")
     cliente = None
 
-# --- CARGA DIFERIDA DEL MODELO CON LOGS Y CONTROL DE ERRORES ---
+# --- CARGA DIFERIDA DEL MODELO ULTRA LIGERO ---
 _modelo = None
 
 def get_model():
-    """Carga el modelo de embeddings solo cuando es necesario, con logs detallados."""
-    global _modelo
-    if _modelo is None:
-        logger.info("🔄 Iniciando carga del modelo de embeddings...")
-        try:
-            # Forzar recolección de basura antes de cargar
-            gc.collect()
-            logger.info("📦 Cargando modelo 'allmini'...")
-
-
-           # --- CARGA DIFERIDA DEL MODELO ULTRA LIGERO ---
-_modelo = None
-
-def get_model():
+    """Carga el modelo de embeddings solo cuando es necesario."""
     global _modelo
     if _modelo is None:
         logger.info("🔄 Cargando modelo MiniLM L3 de 60MB...")
-        # Forzar recolección de basura antes de cargar
-        gc.collect()
-        _modelo = SentenceTransformer('paraphrase-MiniLM-L3-v2')
-        logger.info("✅ Modelo L3 cargado correctamente")
+        try:
+            # Forzar recolección de basura antes de cargar
+            gc.collect()
+            _modelo = SentenceTransformer('paraphrase-MiniLM-L3-v2')
+            logger.info("✅ Modelo L3 cargado correctamente")
+        except Exception as e:
+            logger.error(f"❌ Error cargando el modelo: {e}")
+            raise e
     return _modelo
-
-
-# Cargar el modelo al arrancar la app (para que falle rápido si no puede)
-logger.info("🔄 Iniciando carga preventiva del modelo...")
-try:
-    modelo_prueba = get_model()
-    logger.info("✅ Carga preventiva exitosa")
-except Exception as e:
-    logger.error(f"❌ La carga preventiva falló: {e}")
-    # No salimos, pero la app fallará en el primer /chat
 
 # --- CARGA DE LOS .PKL (FRAGMENTOS Y EMBEDDINGS) ---
 logger.info("📚 Cargando datos del asistente...")
@@ -105,23 +93,20 @@ def buscar_fragmentos(pregunta, top_k=3):
         return []
     
     try:
-        # Obtener el modelo (se carga aquí la primera vez si no se cargó antes)
+        # Obtener el modelo
         modelo = get_model()
         
         # Crear embedding de la pregunta
-        logger.debug(f"Generando embedding para: {pregunta[:30]}...")
         embedding_pregunta = modelo.encode(pregunta)
         
-        # Calcular similitudes
+        # Calcular similitudes (coseno)
         similitudes = []
         for i, emb in enumerate(embeddings):
-            # Normalizar para producto punto (asumimos embeddings ya normalizados)
-            similitud = np.dot(embedding_pregunta, emb)
+            similitud = np.dot(embedding_pregunta, emb) / (np.linalg.norm(embedding_pregunta) * np.linalg.norm(emb))
             similitudes.append((i, similitud))
         
         # Ordenar por similitud
         similitudes.sort(key=lambda x: x[1], reverse=True)
-        logger.debug(f"Mejor similitud: {similitudes[0][1]:.4f}")
         
         # Devolver los top_k fragmentos
         return [fragmentos[i] for i, _ in similitudes[:min(top_k, len(similitudes))]]
@@ -137,10 +122,22 @@ def home():
     """Endpoint de salud y verificación."""
     return jsonify({
         "status": "online",
-        "message": "Asistente Opositores API (Embeddings español - versión mejorada)",
+        "message": "Asistente Opositores API (Modelo L3 ultra ligero)",
         "fragmentos_cargados": len(fragmentos),
         "modelo_cargado": _modelo is not None,
         "openai_ok": cliente is not None
+    })
+
+@app.route('/debug', methods=['GET'])
+def debug():
+    """Endpoint para depuración."""
+    return jsonify({
+        "modelo_cargado": _modelo is not None,
+        "num_fragmentos": len(fragmentos),
+        "num_embeddings": len(embeddings),
+        "openai_ok": cliente is not None,
+        "python_version": sys.version,
+        "memoria": f"{gc.get_count()}"
     })
 
 @app.route('/chat', methods=['POST', 'OPTIONS'])
@@ -157,7 +154,6 @@ def chat():
     try:
         # Forzar limpieza de memoria antes de procesar
         gc.collect()
-        logger.debug("Memoria limpiada antes de procesar petición")
         
         # Verificar datos de entrada
         data = request.json
@@ -173,13 +169,6 @@ def chat():
         
         logger.info(f"📨 Procesando pregunta: {pregunta[:100]}...")
         
-        # Verificar que tenemos el modelo
-        try:
-            modelo = get_model()
-        except Exception as e:
-            logger.error(f"❌ No se pudo cargar el modelo: {e}")
-            return jsonify({"error": "Error interno: no se pudo cargar el modelo de embeddings"}), 500
-        
         # Buscar fragmentos relevantes
         fragmentos_relevantes = buscar_fragmentos(pregunta)
         
@@ -191,7 +180,6 @@ def chat():
         
         # Crear contexto con los fragmentos
         contexto = "\n\n---\n\n".join(fragmentos_relevantes)
-        logger.debug(f"Contexto generado ({len(contexto)} caracteres)")
         
         # Verificar cliente OpenAI
         if not cliente:
@@ -220,31 +208,15 @@ def chat():
         
         # Limpiar memoria después de procesar
         gc.collect()
-        logger.debug("Memoria limpiada después de procesar petición")
         
-        # Preparar respuesta con cabeceras CORS explícitas
-        response = jsonify({
+        return jsonify({
             "respuesta": respuesta_texto,
             "fragmentos_usados": len(fragmentos_relevantes)
         })
-        response.headers.add("Access-Control-Allow-Origin", "*")
-        return response
         
     except Exception as e:
         logger.error(f"❌ Error no controlado en /chat: {e}", exc_info=True)
         return jsonify({"error": f"Error interno del servidor: {str(e)}"}), 500
-
-@app.route('/debug', methods=['GET'])
-def debug():
-    """Endpoint para depuración (solo para pruebas)."""
-    return jsonify({
-        "modelo_cargado": _modelo is not None,
-        "num_fragmentos": len(fragmentos),
-        "num_embeddings": len(embeddings),
-        "openai_ok": cliente is not None,
-        "python_version": sys.version,
-        "memoria": f"{gc.get_count()}"
-    })
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
