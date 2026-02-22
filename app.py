@@ -7,8 +7,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 import logging
 import sys
-import gc  # Garbage collector
-from functools import lru_cache
+import gc
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -24,275 +23,162 @@ app = Flask(__name__)
 CORS(app, origins="*", allow_headers=["Content-Type"], methods=["POST", "OPTIONS", "GET"])
 logger.info("✅ CORS configurado")
 
-import time
-# Timeouts generosos
-app.config['TIMEOUT'] = 300
-app.config['WORKER_TIMEOUT'] = 300
-
 # Configuración OpenAI
 API_KEY = os.getenv("OPENAI_API_KEY")
 if not API_KEY:
     logger.error("❌ No se encuentra la API key de OpenAI")
+else:
+    logger.info("✅ API key encontrada")
 
-# Cliente OpenAI (se inicializa bajo demanda)
+# Inicializar cliente OpenAI (bajo demanda)
 _cliente = None
-
 def get_openai_client():
-    """Inicializa el cliente OpenAI solo cuando es necesario"""
     global _cliente
     if _cliente is None and API_KEY:
         try:
             import httpx
-            http_client = httpx.Client(
-                base_url="https://api.openai.com/v1",
-                follow_redirects=True,
-                timeout=httpx.Timeout(60.0, connect=5.0)
-            )
-            _cliente = OpenAI(api_key=API_KEY, http_client=http_client)
-            logger.info("✅ Cliente OpenAI inicializado bajo demanda")
+            _cliente = OpenAI(api_key=API_KEY)
+            logger.info("✅ Cliente OpenAI inicializado")
         except Exception as e:
             logger.error(f"❌ Error inicializando OpenAI: {e}")
     return _cliente
 
-# --- MODELO DE EMBEDDINGS (LAZY LOADING) ---
+# --- CARGA DEL MODELO ---
 _modelo = None
-
 def get_model():
-    """Carga el modelo SOLO cuando se necesita (lazy loading)"""
     global _modelo
     if _modelo is None:
-        logger.info("🔄 Cargando modelo multilingüe bajo demanda (primera consulta)...")
+        logger.info("🔄 Cargando modelo...")
         try:
-            # Importación local para no ocupar memoria hasta necesitarlo
             from sentence_transformers import SentenceTransformer
-            
-            # Modelo multilingüe
-            _modelo = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
-            
-            # Forzar a usar CPU y optimizar memoria
-            _modelo.to('cpu')
-            _modelo.eval()
-            
-            logger.info("✅ Modelo cargado correctamente bajo demanda")
-            
-            # Forzar garbage collection
-            gc.collect()
-            
+            _modelo = SentenceTransformer('paraphrase-MiniLM-L3-v2')
+            logger.info("✅ Modelo cargado")
         except Exception as e:
-            logger.error(f"❌ Error fatal cargando el modelo: {e}")
-            return None
+            logger.error(f"❌ Error cargando modelo: {e}")
     return _modelo
 
-# --- CARGA INTELIGENTE DE DATOS ---
-class DataLoader:
-    """Carga datos bajo demanda con caché"""
-    def __init__(self):
-        self._fragmentos = None
-        self._embeddings = None
-        self._embeddings_norm = None
-        
-    def load_all(self):
-        """Carga todos los datos (solo si es necesario)"""
-        if self._fragmentos is None:
-            logger.info("📚 Cargando datos del asistente...")
-            try:
-                with open("fragmentos.pkl", "rb") as f:
-                    self._fragmentos = pickle.load(f)
-                
-                with open("embeddings.pkl", "rb") as f:
-                    self._embeddings = pickle.load(f)
-                    if not isinstance(self._embeddings, np.ndarray):
-                        self._embeddings = np.array(self._embeddings)
-                    self._embeddings_norm = np.linalg.norm(self._embeddings, axis=1)
-                
-                logger.info(f"✅ Datos cargados: {len(self._fragmentos)} fragmentos")
-                gc.collect()
-                
-            except FileNotFoundError as e:
-                logger.error(f"❌ No se encuentran los archivos .pkl: {e}")
-            except Exception as e:
-                logger.error(f"❌ Error cargando datos: {e}", exc_info=True)
-        
-        return self._fragmentos is not None
-    
-    @property
-    def fragmentos(self):
-        if self._fragmentos is None:
-            self.load_all()
-        return self._fragmentos
-    
-    @property
-    def embeddings(self):
-        if self._embeddings is None:
-            self.load_all()
-        return self._embeddings
-    
-    @property
-    def embeddings_norm(self):
-        if self._embeddings_norm is None and self._embeddions is not None:
-            self._embeddings_norm = np.linalg.norm(self._embeddings, axis=1)
-        return self._embeddings_norm
+# --- CARGA DE FRAGMENTOS Y EMBEDDINGS (SIMPLIFICADA) ---
+logger.info("📚 CARGANDO DATOS AL INICIO...")
+fragmentos = []
+embeddings = []
 
-# Instancia global del cargador de datos
-data = DataLoader()
+# Verificar que los archivos existen
+if os.path.exists("fragmentos.pkl") and os.path.exists("embeddings.pkl"):
+    logger.info("✅ Archivos .pkl encontrados")
+    try:
+        with open("fragmentos.pkl", "rb") as f:
+            fragmentos = pickle.load(f)
+        logger.info(f"   - fragmentos.pkl cargado: {len(fragmentos)} fragmentos")
+        
+        with open("embeddings.pkl", "rb") as f:
+            embeddings = pickle.load(f)
+        logger.info(f"   - embeddings.pkl cargado: {len(embeddings)} embeddings")
+        
+        # Convertir a numpy array si es necesario
+        if not isinstance(embeddings, np.ndarray):
+            embeddings = np.array(embeddings)
+            logger.info("   - embeddings convertidos a numpy array")
+            
+    except Exception as e:
+        logger.error(f"❌ Error cargando archivos .pkl: {e}", exc_info=True)
+else:
+    logger.error("❌ No se encuentran los archivos .pkl en el directorio actual")
+    logger.info(f"   Directorio actual: {os.getcwd()}")
+    logger.info(f"   Archivos presentes: {os.listdir('.')}")
 
-# --- FUNCIÓN DE BÚSQUEDA SEMÁNTICA OPTIMIZADA ---
+# --- FUNCIÓN DE BÚSQUEDA SIMPLIFICADA ---
 def buscar_fragmentos(pregunta, top_k=5):
-    """Busca los fragmentos más relevantes usando operaciones vectorizadas"""
-    if not data.fragmentos or len(data.embeddings) == 0:
-        logger.warning("⚠️ No hay fragmentos o embeddings cargados")
+    if not fragmentos or len(embeddings) == 0:
+        logger.warning("⚠️ No hay datos cargados")
         return []
     
     try:
-        modelo_local = get_model()
-        if modelo_local is None:
-            logger.error("❌ Modelo no disponible")
+        modelo = get_model()
+        if modelo is None:
             return []
         
-        # Generar embedding de la pregunta
-        emb_pregunta = modelo_local.encode(pregunta)
+        emb_pregunta = modelo.encode(pregunta)
         
-        # Normalizar el embedding de la pregunta
-        norma_pregunta = np.linalg.norm(emb_pregunta)
-        if norma_pregunta == 0:
-            return []
+        # Calcular similitudes (producto punto normalizado)
+        similitudes = []
+        for i, emb in enumerate(embeddings):
+            sim = np.dot(emb_pregunta, emb) / (np.linalg.norm(emb_pregunta) * np.linalg.norm(emb))
+            similitudes.append((i, sim))
         
-        emb_pregunta_norm = emb_pregunta / norma_pregunta
+        similitudes.sort(key=lambda x: x[1], reverse=True)
+        indices = [i for i, _ in similitudes[:top_k]]
         
-        # Calcular similitudes de forma vectorizada
-        if data.embeddings_norm is not None:
-            embeddings_norm = data.embeddings / data.embeddings_norm[:, np.newaxis]
-            similitudes = np.dot(embeddings_norm, emb_pregunta_norm)
-        else:
-            similitudes = np.dot(data.embeddings, emb_pregunta) / (
-                np.linalg.norm(data.embeddings, axis=1) * norma_pregunta
-            )
-        
-        # Obtener los top_k índices
-        indices = np.argsort(similitudes)[-top_k:][::-1]
-        
-        # Liberar memoria de variables temporales
-        del emb_pregunta, emb_pregunta_norm
-        
-        fragmentos_seleccionados = [data.fragmentos[i] for i in indices]
-        
-        # LOGS DE DEPURACIÓN (AHORA DENTRO DE LA FUNCIÓN)
-        logger.info(f"🔍 Fragmentos encontrados: {len(fragmentos_seleccionados)}")
-        for i, frag in enumerate(fragmentos_seleccionados[:3]):
-            logger.info(f"   Fragmento {i}: {frag[:150]}...")
-        
-        return fragmentos_seleccionados
+        logger.info(f"🔍 Top similitud: {similitudes[0][1]:.4f}")
+        return [fragmentos[i] for i in indices]
     
     except Exception as e:
-        logger.error(f"❌ Error en búsqueda semántica: {e}", exc_info=True)
+        logger.error(f"❌ Error en búsqueda: {e}", exc_info=True)
         return []
 
-# --- RUTAS DE LA API ---
-
+# --- RUTAS ---
 @app.route('/', methods=['GET'])
 def home():
-    """Endpoint de salud - NO carga el modelo"""
     return jsonify({
         "status": "online",
-        "message": "Asistente Opositores API (Versión Optimizada)",
-        "fragmentos_cargados": len(data.fragmentos) if data._fragmentos else 0,
+        "message": "Asistente Opositores API (Versión Simplificada)",
+        "fragmentos_cargados": len(fragmentos),
         "modelo_cargado": _modelo is not None,
         "openai_ok": API_KEY is not None,
-        "plan": "Render 2GB Optimizado"
+        "plan": "Render 2GB"
     })
 
 @app.route('/debug', methods=['GET'])
 def debug():
-    """Endpoint para depuración - NO carga el modelo"""
     return jsonify({
+        "fragmentos": len(fragmentos),
+        "embeddings": len(embeddings) if isinstance(embeddings, list) else embeddings.shape[0] if hasattr(embeddings, 'shape') else 0,
         "modelo_cargado": _modelo is not None,
-        "num_fragmentos": len(data.fragmentos) if data._fragmentos else 0,
-        "num_embeddings": len(data.embeddings) if data._embeddings else 0,
-        "openai_ok": API_KEY is not None,
-        "python_version": sys.version,
-        "memoria_optimizada": True,
-        "lazy_loading": True
+        "archivos": os.listdir('.')[:10]  # Primeros 10 archivos en directorio
     })
 
 @app.route('/chat', methods=['POST', 'OPTIONS'])
 def chat():
-    """Endpoint principal optimizado"""
-    # Manejar preflight OPTIONS
     if request.method == 'OPTIONS':
-        response = jsonify({"status": "ok"})
-        response.headers.add("Access-Control-Allow-Origin", "*")
-        response.headers.add("Access-Control-Allow-Headers", "Content-Type")
-        response.headers.add("Access-Control-Allow-Methods", "POST")
-        return response, 200
+        return '', 200
     
     try:
-        # Verificar datos de entrada
-        data_req = request.json
-        if not data_req:
+        data = request.json
+        if not data:
             return jsonify({"error": "Formato JSON inválido"}), 400
             
-        pregunta = data_req.get('pregunta', '').strip()
-        
+        pregunta = data.get('pregunta', '').strip()
         if not pregunta:
             return jsonify({"error": "Pregunta vacía"}), 400
         
-        logger.info(f"📨 Procesando pregunta: {pregunta[:100]}...")
+        logger.info(f"📨 Pregunta: {pregunta[:100]}...")
         
-        # Buscar fragmentos (esto carga el modelo automáticamente)
         fragmentos_relevantes = buscar_fragmentos(pregunta, top_k=5)
         
         if not fragmentos_relevantes:
-            return jsonify({"respuesta": "No encontré información relevante en los documentos."})
+            return jsonify({"respuesta": "No encontré información relevante."})
         
-        # Crear contexto
         contexto = "\n\n---\n\n".join(fragmentos_relevantes)
         
-        # Obtener cliente OpenAI bajo demanda
         cliente = get_openai_client()
         if not cliente:
-            logger.error("Cliente OpenAI no disponible")
-            return jsonify({"error": "Cliente OpenAI no configurado"}), 500
+            return jsonify({"error": "OpenAI no disponible"}), 500
         
-        # Consultar a OpenAI
-        logger.info("🤖 Consultando a OpenAI...")
-        try:
-            respuesta = cliente.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "Eres un asistente experto para opositores. Responde usando la información del contexto."},
-                    {"role": "user", "content": f"Contexto:\n{contexto}\n\nPregunta: {pregunta}"}
-                ],
-                temperature=0.7,
-                max_tokens=400
-            )
-            
-            respuesta_texto = respuesta.choices[0].message.content
-            logger.info("✅ Respuesta generada correctamente")
-            
-            # Liberar memoria
-            del contexto, fragmentos_relevantes
-            gc.collect()
-            
-        except Exception as e:
-            logger.error(f"❌ Error en OpenAI: {e}", exc_info=True)
-            return jsonify({"error": f"Error al consultar OpenAI: {str(e)}"}), 500
+        respuesta = cliente.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "Eres un asistente experto para opositores. Responde usando la información del contexto."},
+                {"role": "user", "content": f"Contexto:\n{contexto}\n\nPregunta: {pregunta}"}
+            ],
+            temperature=0.7,
+            max_tokens=400
+        )
         
-        response = jsonify({"respuesta": respuesta_texto})
-        response.headers.add("Access-Control-Allow-Origin", "*")
-        return response
+        return jsonify({"respuesta": respuesta.choices[0].message.content})
         
     except Exception as e:
-        logger.error(f"Error en /chat: {e}", exc_info=True)
-        return jsonify({"error": f"Error interno: {str(e)}"}), 500
-
-# Endpoint para forzar liberación de memoria
-@app.route('/cleanup', methods=['POST'])
-def cleanup():
-    """Endpoint para forzar limpieza de memoria"""
-    gc.collect()
-    return jsonify({"status": "Memoria liberada"})
+        logger.error(f"Error: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
-    logger.info(f"🚀 Arrancando aplicación optimizada en puerto {port}")
     app.run(host='0.0.0.0', port=port, debug=False)
