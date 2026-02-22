@@ -24,8 +24,10 @@ app = Flask(__name__)
 CORS(app, origins="*", allow_headers=["Content-Type"], methods=["POST", "OPTIONS", "GET"])
 logger.info("✅ CORS configurado")
 
-# Aumentar tiempo de espera
-app.config['TIMEOUT'] = 120
+import time
+# Timeouts generosos
+app.config['TIMEOUT'] = 300
+app.config['WORKER_TIMEOUT'] = 300
 
 # Configuración OpenAI
 API_KEY = os.getenv("OPENAI_API_KEY")
