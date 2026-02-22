@@ -1,73 +1,54 @@
 import os
-# Matar proxies (por si acaso)
+# Matar proxies
 os.environ["HTTP_PROXY"] = ""
 os.environ["HTTPS_PROXY"] = ""
 os.environ["http_proxy"] = ""
 os.environ["https_proxy"] = ""
 
-# INTERVENCIÓN DIRECTA: Parcheamos la clase OpenAI ANTES de importarla
-import sys
-import types
+# Importación NORMAL de openai
+import openai
 
-# Crear un módulo falso que intercepte la importación
-class OpenAIPatcher:
-    def __init__(self):
-        self._real_openai = None
-    
-    def __getattr__(self, name):
-        if self._real_openai is None:
-            # Importar el real solo cuando sea necesario
-            import openai as real_openai
-            self._real_openai = real_openai
-            # Parchear después de importar
-            original_init = self._real_openai.OpenAI.__init__
-            def patched_init(self_obj, *args, **kwargs):
-                if 'proxies' in kwargs:
-                    print(f"🔪 Matando proxies: {kwargs['proxies']}")
-                    del kwargs['proxies']
-                original_init(self_obj, *args, **kwargs)
-            self._real_openai.OpenAI.__init__ = patched_init
-        return getattr(self._real_openai, name)
+# Parchear la clase después de importar (SIN RECURSIONES)
+original_init = openai.OpenAI.__init__
 
-# Sobrescribir el módulo 'openai' en sys.modules ANTES de que se importe
-sys.modules['openai'] = OpenAIPatcher()
+def patched_init(self, *args, **kwargs):
+    if 'proxies' in kwargs:
+        print(f"🔪 Matando proxies: {kwargs['proxies']}")
+        del kwargs['proxies']
+    original_init(self, *args, **kwargs)
 
-# AHORA importamos todo lo demás (incluyendo openai, que usará el parche)
+openai.OpenAI.__init__ = patched_init
+
+# A partir de aquí, todo igual
 import pickle
 import numpy as np
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
+from openai import OpenAI as OpenAIClient
 import warnings
 import logging
-import sys as sys_module
+import sys
 import gc
-from openai import OpenAI as OpenAIClient  # Esto usará nuestro parche
 
 warnings.filterwarnings("ignore")
 
-# Configurar logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Cargar variables de entorno
 load_dotenv()
 
-# Inicializar Flask
 app = Flask(__name__)
 
-# Configuración CORS
 CORS(app, origins="*", allow_headers=["Content-Type"], methods=["POST", "OPTIONS", "GET"])
 logger.info("✅ CORS configurado")
 
-# Configuración OpenAI
 API_KEY = os.getenv("OPENAI_API_KEY")
 if not API_KEY:
     logger.error("❌ No se encuentra la API key de OpenAI")
     cliente_openai = None
 else:
     try:
-        # La forma MÁS SIMPLE posible - sin argumentos extra
         cliente_openai = OpenAIClient(api_key=API_KEY)
         logger.info("✅ Cliente OpenAI inicializado correctamente")
     except Exception as e:
@@ -77,11 +58,9 @@ else:
 def get_openai_client():
     return cliente_openai
 
-# Inicializar cliente al arrancar
 if API_KEY:
     get_openai_client()
 
-# --- CARGA DEL MODELO ---
 _modelo = None
 def get_model():
     global _modelo
@@ -95,12 +74,10 @@ def get_model():
             logger.error(f"❌ Error: {e}")
     return _modelo
 
-# --- CARGA DE FRAGMENTOS Y EMBEDDINGS ---
 logger.info("📚 CARGANDO DATOS AL INICIO...")
 fragmentos = []
 embeddings = []
 
-# Verificar que los archivos existen
 if os.path.exists("fragmentos.pkl") and os.path.exists("embeddings.pkl"):
     logger.info("✅ Archivos .pkl encontrados")
     try:
@@ -112,7 +89,6 @@ if os.path.exists("fragmentos.pkl") and os.path.exists("embeddings.pkl"):
             embeddings = pickle.load(f)
         logger.info(f"   - embeddings.pkl cargado: {len(embeddings)} embeddings")
         
-        # Convertir a numpy array si es necesario
         if not isinstance(embeddings, np.ndarray):
             embeddings = np.array(embeddings)
             logger.info("   - embeddings convertidos a numpy array")
@@ -121,10 +97,8 @@ if os.path.exists("fragmentos.pkl") and os.path.exists("embeddings.pkl"):
         logger.error(f"❌ Error cargando archivos .pkl: {e}", exc_info=True)
 else:
     logger.error("❌ No se encuentran los archivos .pkl en el directorio actual")
-    logger.info(f"   Directorio actual: {os.getcwd()}")
     logger.info(f"   Archivos presentes: {os.listdir('.')}")
 
-# --- FUNCIÓN DE BÚSQUEDA SEMÁNTICA ---
 def buscar_fragmentos(pregunta, top_k=5):
     if not fragmentos or len(embeddings) == 0:
         logger.warning("⚠️ No hay datos cargados")
@@ -137,7 +111,6 @@ def buscar_fragmentos(pregunta, top_k=5):
         
         emb_pregunta = modelo.encode(pregunta)
         
-        # Calcular similitudes (producto punto normalizado)
         similitudes = []
         for i, emb in enumerate(embeddings):
             sim = np.dot(emb_pregunta, emb) / (np.linalg.norm(emb_pregunta) * np.linalg.norm(emb))
@@ -153,17 +126,15 @@ def buscar_fragmentos(pregunta, top_k=5):
         logger.error(f"❌ Error en búsqueda: {e}", exc_info=True)
         return []
 
-# --- RUTAS DE LA API ---
 @app.route('/', methods=['GET'])
 def home():
     return jsonify({
         "status": "online",
-        "message": "Asistente Opositores API (Versión Definitiva)",
+        "message": "Asistente Opositores API (Versión Simplificada)",
         "fragmentos_cargados": len(fragmentos),
         "modelo_cargado": _modelo is not None,
         "openai_ok": API_KEY is not None,
-        "plan": "Render 2GB",
-        "parche_activo": "✅"
+        "plan": "Render 2GB"
     })
 
 @app.route('/debug', methods=['GET'])
@@ -198,7 +169,6 @@ def chat():
         
         contexto = "\n\n---\n\n".join(fragmentos_relevantes)
         
-        # Limpiar memoria antes de usar OpenAI
         gc.collect()
         
         cliente = get_openai_client()
@@ -223,5 +193,4 @@ def chat():
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
-    logger.info(f"🚀 Arrancando aplicación definitiva en puerto {port}")
     app.run(host='0.0.0.0', port=port, debug=False)
