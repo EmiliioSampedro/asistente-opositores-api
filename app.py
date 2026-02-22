@@ -64,7 +64,7 @@ def get_model():
             # Importación local para no ocupar memoria hasta necesitarlo
             from sentence_transformers import SentenceTransformer
             
-            # Versión más ligera del modelo (misma calidad, 30% menos RAM)
+            # Modelo multilingüe
             _modelo = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
             
             # Forzar a usar CPU y optimizar memoria
@@ -82,14 +82,12 @@ def get_model():
     return _modelo
 
 # --- CARGA INTELIGENTE DE DATOS ---
-# En lugar de cargar todo al inicio, usamos un sistema de caché
-
 class DataLoader:
     """Carga datos bajo demanda con caché"""
     def __init__(self):
         self._fragmentos = None
         self._embeddings = None
-        self._embeddings_norm = None  # Embeddings normalizados para búsqueda más rápida
+        self._embeddings_norm = None
         
     def load_all(self):
         """Carga todos los datos (solo si es necesario)"""
@@ -101,16 +99,11 @@ class DataLoader:
                 
                 with open("embeddings.pkl", "rb") as f:
                     self._embeddings = pickle.load(f)
-                    # Convertir a numpy array para operaciones más eficientes
                     if not isinstance(self._embeddings, np.ndarray):
                         self._embeddings = np.array(self._embeddings)
-                    
-                    # Pre-calcular normas para búsqueda más rápida
                     self._embeddings_norm = np.linalg.norm(self._embeddings, axis=1)
                 
                 logger.info(f"✅ Datos cargados: {len(self._fragmentos)} fragmentos")
-                
-                # Liberar memoria
                 gc.collect()
                 
             except FileNotFoundError as e:
@@ -134,7 +127,7 @@ class DataLoader:
     
     @property
     def embeddings_norm(self):
-        if self._embeddings_norm is None and self._embeddings is not None:
+        if self._embeddings_norm is None and self._embeddions is not None:
             self._embeddings_norm = np.linalg.norm(self._embeddings, axis=1)
         return self._embeddings_norm
 
@@ -143,13 +136,10 @@ data = DataLoader()
 
 # --- FUNCIÓN DE BÚSQUEDA SEMÁNTICA OPTIMIZADA ---
 def buscar_fragmentos(pregunta, top_k=5):
-    logger.info(f"🔍 Fragmentos encontrados: {len(fragmentos_relevantes)}")
-for i, frag in enumerate(fragmentos_relevantes[:3]):
-    logger.info(f"   Fragmento {i}: {frag[:150]}...")
     """Busca los fragmentos más relevantes usando operaciones vectorizadas"""
     if not data.fragmentos or len(data.embeddings) == 0:
         logger.warning("⚠️ No hay fragmentos o embeddings cargados")
-        
+        return []
     
     try:
         modelo_local = get_model()
@@ -167,14 +157,11 @@ for i, frag in enumerate(fragmentos_relevantes[:3]):
         
         emb_pregunta_norm = emb_pregunta / norma_pregunta
         
-        # Calcular similitudes de forma vectorizada (MUCHO más rápido y eficiente)
-        # Si tenemos las normas pre-calculadas de los fragmentos
+        # Calcular similitudes de forma vectorizada
         if data.embeddings_norm is not None:
-            # Normalizar todos los embeddings de una vez
             embeddings_norm = data.embeddings / data.embeddings_norm[:, np.newaxis]
             similitudes = np.dot(embeddings_norm, emb_pregunta_norm)
         else:
-            # Fallback al método anterior
             similitudes = np.dot(data.embeddings, emb_pregunta) / (
                 np.linalg.norm(data.embeddings, axis=1) * norma_pregunta
             )
@@ -185,7 +172,14 @@ for i, frag in enumerate(fragmentos_relevantes[:3]):
         # Liberar memoria de variables temporales
         del emb_pregunta, emb_pregunta_norm
         
-        return [data.fragmentos[i] for i in indices]
+        fragmentos_seleccionados = [data.fragmentos[i] for i in indices]
+        
+        # LOGS DE DEPURACIÓN (AHORA DENTRO DE LA FUNCIÓN)
+        logger.info(f"🔍 Fragmentos encontrados: {len(fragmentos_seleccionados)}")
+        for i, frag in enumerate(fragmentos_seleccionados[:3]):
+            logger.info(f"   Fragmento {i}: {frag[:150]}...")
+        
+        return fragmentos_seleccionados
     
     except Exception as e:
         logger.error(f"❌ Error en búsqueda semántica: {e}", exc_info=True)
@@ -243,7 +237,7 @@ def chat():
         logger.info(f"📨 Procesando pregunta: {pregunta[:100]}...")
         
         # Buscar fragmentos (esto carga el modelo automáticamente)
-        fragmentos_relevantes = buscar_fragmentos(pregunta, top_k=5)  # Reducido a 5 para menos memoria
+        fragmentos_relevantes = buscar_fragmentos(pregunta, top_k=5)
         
         if not fragmentos_relevantes:
             return jsonify({"respuesta": "No encontré información relevante en los documentos."})
@@ -267,7 +261,7 @@ def chat():
                     {"role": "user", "content": f"Contexto:\n{contexto}\n\nPregunta: {pregunta}"}
                 ],
                 temperature=0.7,
-                max_tokens=400  # Reducido para menor procesamiento
+                max_tokens=400
             )
             
             respuesta_texto = respuesta.choices[0].message.content
@@ -299,5 +293,4 @@ def cleanup():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     logger.info(f"🚀 Arrancando aplicación optimizada en puerto {port}")
-    # No cargar nada al inicio, solo el servidor Flask
     app.run(host='0.0.0.0', port=port, debug=False)
