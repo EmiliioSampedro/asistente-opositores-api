@@ -1,21 +1,45 @@
 import os
+# Matar proxies (por si acaso)
+os.environ["HTTP_PROXY"] = ""
+os.environ["HTTPS_PROXY"] = ""
+os.environ["http_proxy"] = ""
+os.environ["https_proxy"] = ""
+
+# Importación SECUESTRADA - Forzamos a que no haya proxies
+import builtins
+original_import = builtins.__import__
+
+def patched_import(name, *args, **kwargs):
+    module = original_import(name, *args, **kwargs)
+    if name == 'openai':
+        # Parchear la clase OpenAI justo después de importar
+        if hasattr(module, 'OpenAI'):
+            original_init = module.OpenAI.__init__
+            def new_init(self, *args, **kwargs):
+                if 'proxies' in kwargs:
+                    print(f"🔪 Matando proxies en importación: {kwargs['proxies']}")
+                    del kwargs['proxies']
+                original_init(self, *args, **kwargs)
+            module.OpenAI.__init__ = new_init
+    return module
+
+builtins.__import__ = patched_import
+
+# AHORA importamos todo con el import secuestrado
 import pickle
 import numpy as np
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
 import openai
+from openai import OpenAI as OpenAIClient
 import logging
 import sys
 import gc
 import warnings
 warnings.filterwarnings("ignore")
 
-# === LIMPIEZA TOTAL ===
-os.environ["HTTP_PROXY"] = ""
-os.environ["HTTPS_PROXY"] = ""
-os.environ["http_proxy"] = ""
-os.environ["https_proxy"] = ""
+# Resto del código IGUAL que antes
 
 # === PARCHE ANTIPROXIES (el que funciona) ===
 original_init = openai.OpenAI.__init__
@@ -26,7 +50,7 @@ def patched_init(self, *args, **kwargs):
     original_init(self, *args, **kwargs)
 openai.OpenAI.__init__ = patched_init
 
-from openai import OpenAI as OpenAIClient
+
 
 # === CONFIGURACIÓN ===
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
