@@ -1,2 +1,6 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+# Configuración para archivos de texto
+*.txt text eol=lf
+*.py text eol=lf
+*.pkl binary
