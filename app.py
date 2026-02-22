@@ -1,36 +1,50 @@
 import os
-# Matar proxies
+# Matar proxies (por si acaso)
 os.environ["HTTP_PROXY"] = ""
 os.environ["HTTPS_PROXY"] = ""
 os.environ["http_proxy"] = ""
 os.environ["https_proxy"] = ""
+
+# INTERVENCIÓN DIRECTA: Parcheamos la clase OpenAI ANTES de importarla
+import sys
+import types
+
+# Crear un módulo falso que intercepte la importación
+class OpenAIPatcher:
+    def __init__(self):
+        self._real_openai = None
+    
+    def __getattr__(self, name):
+        if self._real_openai is None:
+            # Importar el real solo cuando sea necesario
+            import openai as real_openai
+            self._real_openai = real_openai
+            # Parchear después de importar
+            original_init = self._real_openai.OpenAI.__init__
+            def patched_init(self_obj, *args, **kwargs):
+                if 'proxies' in kwargs:
+                    print(f"🔪 Matando proxies: {kwargs['proxies']}")
+                    del kwargs['proxies']
+                original_init(self_obj, *args, **kwargs)
+            self._real_openai.OpenAI.__init__ = patched_init
+        return getattr(self._real_openai, name)
+
+# Sobrescribir el módulo 'openai' en sys.modules ANTES de que se importe
+sys.modules['openai'] = OpenAIPatcher()
+
+# AHORA importamos todo lo demás (incluyendo openai, que usará el parche)
 import pickle
 import numpy as np
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
-import openai
-from openai import OpenAI as OpenAIClient
 import warnings
 import logging
-import sys
+import sys as sys_module
 import gc
+from openai import OpenAI as OpenAIClient  # Esto usará nuestro parche
 
 warnings.filterwarnings("ignore")
-
-# INTERVENCIÓN DIRECTA: Parcheamos la clase OpenAI para que ignore 'proxies'
-original_init = openai.OpenAI.__init__
-
-def patched_init(self, *args, **kwargs):
-    # Eliminar el argumento 'proxies' si existe (el fantasma)
-    if 'proxies' in kwargs:
-        print(f"🔪 Matando proxies: {kwargs['proxies']}")
-        del kwargs['proxies']
-    # Llamar al init original
-    original_init(self, *args, **kwargs)
-
-# Aplicar el parche
-openai.OpenAI.__init__ = patched_init
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -81,7 +95,7 @@ def get_model():
             logger.error(f"❌ Error: {e}")
     return _modelo
 
-# --- CARGA DE FRAGMENTOS Y EMBEDDINGS (SIMPLIFICADA) ---
+# --- CARGA DE FRAGMENTOS Y EMBEDDINGS ---
 logger.info("📚 CARGANDO DATOS AL INICIO...")
 fragmentos = []
 embeddings = []
@@ -110,7 +124,7 @@ else:
     logger.info(f"   Directorio actual: {os.getcwd()}")
     logger.info(f"   Archivos presentes: {os.listdir('.')}")
 
-# --- FUNCIÓN DE BÚSQUEDA SIMPLIFICADA ---
+# --- FUNCIÓN DE BÚSQUEDA SEMÁNTICA ---
 def buscar_fragmentos(pregunta, top_k=5):
     if not fragmentos or len(embeddings) == 0:
         logger.warning("⚠️ No hay datos cargados")
@@ -139,16 +153,17 @@ def buscar_fragmentos(pregunta, top_k=5):
         logger.error(f"❌ Error en búsqueda: {e}", exc_info=True)
         return []
 
-# --- RUTAS ---
+# --- RUTAS DE LA API ---
 @app.route('/', methods=['GET'])
 def home():
     return jsonify({
         "status": "online",
-        "message": "Asistente Opositores API (Versión Simplificada)",
+        "message": "Asistente Opositores API (Versión Definitiva)",
         "fragmentos_cargados": len(fragmentos),
         "modelo_cargado": _modelo is not None,
         "openai_ok": API_KEY is not None,
-        "plan": "Render 2GB"
+        "plan": "Render 2GB",
+        "parche_activo": "✅"
     })
 
 @app.route('/debug', methods=['GET'])
@@ -208,4 +223,5 @@ def chat():
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
+    logger.info(f"🚀 Arrancando aplicación definitiva en puerto {port}")
     app.run(host='0.0.0.0', port=port, debug=False)
