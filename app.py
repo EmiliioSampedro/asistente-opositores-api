@@ -149,7 +149,7 @@ for i, frag in enumerate(fragmentos_relevantes[:3]):
     """Busca los fragmentos más relevantes usando operaciones vectorizadas"""
     if not data.fragmentos or len(data.embeddings) == 0:
         logger.warning("⚠️ No hay fragmentos o embeddings cargados")
-        return []
+        
     
     try:
         modelo_local = get_model()
