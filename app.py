@@ -8,7 +8,6 @@ from openai import OpenAI
 from sentence_transformers import SentenceTransformer
 import logging
 import httpx
-import gc
 import sys
 
 # Configurar logging
@@ -20,13 +19,13 @@ load_dotenv()
 
 # Inicializar Flask
 app = Flask(__name__)
-# Configuración CORS
 
+# Configuración CORS simple y efectiva
+CORS(app, origins="*", allow_headers=["Content-Type"], methods=["POST", "OPTIONS", "GET"])
+logger.info("✅ CORS configurado para recibir peticiones desde cualquier origen")
 
-# Configuración CORS ultra simple
-CORS(app)  # Sin opciones, la configuración por defecto
-logger.info("✅ CORS configurado en modo simple")
-
+# Aumentar tiempo de espera para peticiones largas
+app.config['TIMEOUT'] = 120
 
 # Configuración
 API_KEY = os.getenv("OPENAI_API_KEY")
@@ -48,25 +47,20 @@ except Exception as e:
     logger.error(f"❌ Error inicializando OpenAI: {e}")
     cliente = None
 
-# --- CARGA DIFERIDA DEL MODELO ULTRA LIGERO ---
-_modelo = None
+# --- CARGA DEL MODELO AL ARRANCAR (AHORA CON 2GB DE RAM) ---
+logger.info("🔄 Cargando modelo multilingüe al arrancar...")
+try:
+    modelo = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
+    logger.info("✅ Modelo multilingüe cargado correctamente")
+except Exception as e:
+    logger.error(f"❌ Error fatal cargando el modelo: {e}")
+    modelo = None
 
 def get_model():
-    """Carga el modelo de embeddings solo cuando es necesario."""
-    global _modelo
-    if _modelo is None:
-        logger.info("🔄 Cargando modelo MiniLM L3 de 60MB...")
-        try:
-            # Forzar recolección de basura antes de cargar
-            gc.collect()
-            _modelo = SentenceTransformer('paraphrase-MiniLM-L3-v2')
-            logger.info("✅ Modelo L3 cargado correctamente")
-        except Exception as e:
-            logger.error(f"❌ Error cargando el modelo: {e}")
-            raise e
-    return _modelo
+    """Devuelve el modelo ya cargado."""
+    return modelo
 
-# --- CARGA DE LOS .PKL (FRAGMENTOS Y EMBEDDINGS) ---
+# --- CARGA DE LOS .PKL ---
 logger.info("📚 Cargando datos del asistente...")
 fragmentos = []
 embeddings = []
@@ -82,30 +76,35 @@ except Exception as e:
     logger.error(f"❌ Error cargando datos: {e}", exc_info=True)
 
 # --- FUNCIÓN DE BÚSQUEDA SEMÁNTICA ---
-def buscar_fragmentos(pregunta, top_k=5):
+def buscar_fragmentos(pregunta, top_k=7):
     """Busca los fragmentos más relevantes para la pregunta."""
     if not fragmentos or len(embeddings) == 0:
         logger.warning("⚠️ No hay fragmentos o embeddings cargados")
         return []
     
     try:
-        # Obtener el modelo
-        modelo = get_model()
+        modelo_local = get_model()
+        if modelo_local is None:
+            logger.error("❌ Modelo no disponible")
+            return []
+            
+        emb_pregunta = modelo_local.encode(pregunta)
         
-        # Crear embedding de la pregunta
-        embedding_pregunta = modelo.encode(pregunta)
-        
-        # Calcular similitudes (coseno)
         similitudes = []
         for i, emb in enumerate(embeddings):
-            similitud = np.dot(embedding_pregunta, emb) / (np.linalg.norm(embedding_pregunta) * np.linalg.norm(emb))
-            similitudes.append((i, similitud))
+            norma_pregunta = np.linalg.norm(emb_pregunta)
+            norma_frag = np.linalg.norm(emb)
+            if norma_pregunta > 0 and norma_frag > 0:
+                sim = np.dot(emb_pregunta, emb) / (norma_pregunta * norma_frag)
+            else:
+                sim = 0
+            similitudes.append((i, sim))
         
-        # Ordenar por similitud
         similitudes.sort(key=lambda x: x[1], reverse=True)
         
         # Devolver los top_k fragmentos
-        return [fragmentos[i] for i, _ in similitudes[:min(top_k, len(similitudes))]]
+        indices = [i for i, _ in similitudes[:min(top_k, len(similitudes))]]
+        return [fragmentos[i] for i in indices]
     
     except Exception as e:
         logger.error(f"❌ Error en búsqueda semántica: {e}", exc_info=True)
@@ -115,34 +114,41 @@ def buscar_fragmentos(pregunta, top_k=5):
 
 @app.route('/', methods=['GET'])
 def home():
-    """Endpoint de salud y verificación."""
+    """Endpoint de salud."""
     return jsonify({
         "status": "online",
-        "message": "Asistente Opositores API (Modelo L3 ultra ligero)",
+        "message": "Asistente Opositores API (Versión Professional)",
         "fragmentos_cargados": len(fragmentos),
-        "modelo_cargado": _modelo is not None,
-        "openai_ok": cliente is not None
+        "modelo_cargado": modelo is not None,
+        "openai_ok": cliente is not None,
+        "plan": "Professional 2GB"
     })
 
 @app.route('/debug', methods=['GET'])
 def debug():
     """Endpoint para depuración."""
     return jsonify({
-        "modelo_cargado": _modelo is not None,
+        "modelo_cargado": modelo is not None,
         "num_fragmentos": len(fragmentos),
         "num_embeddings": len(embeddings),
         "openai_ok": cliente is not None,
         "python_version": sys.version,
-        "memoria": f"{gc.get_count()}"
+        "modelo_nombre": "paraphrase-multilingual-MiniLM-L12-v2"
     })
 
 @app.route('/chat', methods=['POST', 'OPTIONS'])
 def chat():
+    """Endpoint principal para el chat."""
     # Manejar preflight OPTIONS
     if request.method == 'OPTIONS':
-        return '', 200
+        response = jsonify({"status": "ok"})
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add("Access-Control-Allow-Headers", "Content-Type")
+        response.headers.add("Access-Control-Allow-Methods", "POST")
+        return response, 200
     
-    try:  # ← Este try debe estar aquí
+    try:
+        # Verificar datos de entrada
         data = request.json
         if not data:
             return jsonify({"error": "Formato JSON inválido"}), 400
@@ -154,8 +160,13 @@ def chat():
         
         logger.info(f"📨 Procesando pregunta: {pregunta[:100]}...")
         
-        # Buscar fragmentos (AHORA CON TOP_K=5)
-        fragmentos_relevantes = buscar_fragmentos(pregunta, top_k=5)
+        # Verificar que el modelo está disponible
+        if modelo is None:
+            logger.error("❌ Modelo no disponible")
+            return jsonify({"error": "Modelo no disponible"}), 500
+        
+        # Buscar fragmentos (top_k=7 para más contexto)
+        fragmentos_relevantes = buscar_fragmentos(pregunta, top_k=7)
         
         if not fragmentos_relevantes:
             return jsonify({"respuesta": "No encontré información relevante en los documentos."})
@@ -165,28 +176,39 @@ def chat():
         
         # Verificar cliente OpenAI
         if not cliente:
+            logger.error("Cliente OpenAI no disponible")
             return jsonify({"error": "Cliente OpenAI no configurado"}), 500
         
-        # Consultar a OpenAI con prompt mejorado
-        respuesta = cliente.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "Eres un asistente experto para opositores. Responde a la pregunta usando la información del contexto. Si el contexto contiene la respuesta, úsala directamente."},
-                {"role": "user", "content": f"Contexto:\n{contexto}\n\nPregunta: {pregunta}"}
-            ],
-            temperature=0.7,
-            max_tokens=500
-        )
+        # Consultar a OpenAI
+        logger.info("🤖 Consultando a OpenAI...")
+        try:
+            respuesta = cliente.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "Eres un asistente experto para opositores. Responde a la pregunta usando la información del contexto. Si el contexto contiene la respuesta, úsala directamente. No digas que no tienes información si el contexto la contiene."},
+                    {"role": "user", "content": f"Contexto:\n{contexto}\n\nPregunta: {pregunta}"}
+                ],
+                temperature=0.7,
+                max_tokens=500
+            )
+            
+            respuesta_texto = respuesta.choices[0].message.content
+            logger.info("✅ Respuesta generada correctamente")
+            
+        except Exception as e:
+            logger.error(f"❌ Error en OpenAI: {e}", exc_info=True)
+            return jsonify({"error": f"Error al consultar OpenAI: {str(e)}"}), 500
         
-        respuesta_texto = respuesta.choices[0].message.content
+        # Preparar respuesta con CORS
+        response = jsonify({"respuesta": respuesta_texto})
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        return response
         
-        return jsonify({"respuesta": respuesta_texto})
-        
-    except Exception as e:  # ← Este except debe estar aquí
-        logger.error(f"Error en /chat: {e}")
-        return jsonify({"error": str(e)}), 500
+    except Exception as e:
+        logger.error(f"Error en /chat: {e}", exc_info=True)
+        return jsonify({"error": f"Error interno: {str(e)}"}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
-    logger.info(f"🚀 Arrancando aplicación en puerto {port}")
+    logger.info(f"🚀 Arrancando aplicación en puerto {port} con plan Professional 2GB")
     app.run(host='0.0.0.0', port=port, debug=False)
