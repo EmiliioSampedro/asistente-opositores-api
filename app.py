@@ -160,7 +160,7 @@ def chat():
             return jsonify({"error": "No API key found"}), 500
 
         cliente = OpenAI(api_key=api_key)
-        respuesta = cliente.chat.completions.create(
+        respuesta = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": "Eres un asistente para opositores. Responde usando el contexto."},
