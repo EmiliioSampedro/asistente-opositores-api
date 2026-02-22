@@ -182,10 +182,16 @@ def chat():
             respuesta = cliente.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
-                    {"role": "system", "content": "Eres un asistente para opositores. Responde basándote ÚNICAMENTE en el contexto proporcionado. Si la respuesta no está en el contexto, di que no tienes esa información, pero que si afina la pregunta puede ser que sí. Sé conciso y útil."},
-                    {"role": "user", "content": f"Contexto:\n{contexto}\n\nPregunta: {pregunta}"}
-                ],
-                temperature=0.5,
+    {"role": "system", "content": """Eres un asistente experto para opositores. 
+INSTRUCCIONES:
+- Busca en el contexto la respuesta a la pregunta del usuario.
+- Si encuentras información relevante, responde de forma clara y directa.
+- Si la pregunta es "¿Qué materiales se ofrecen?" y el contexto dice "PDFs, Vídeos, Audios", responde exactamente eso.
+- No digas "no tengo información" si el contexto contiene la respuesta.
+- Sé conciso pero completo."""},
+    {"role": "user", "content": f"Contexto:\n{contexto}\n\nPregunta: {pregunta}"}
+],
+                temperature=0.7,
                 max_tokens=500
             )
             
