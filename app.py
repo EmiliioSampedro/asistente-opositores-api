@@ -182,10 +182,10 @@ def chat():
             respuesta = cliente.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
-                    {"role": "system", "content": "Eres un asistente para opositores. Responde basándote ÚNICAMENTE en el contexto proporcionado. Si la respuesta no está en el contexto, di que no tienes esa información. Sé conciso y útil."},
+                    {"role": "system", "content": "Eres un asistente para opositores. Responde basándote ÚNICAMENTE en el contexto proporcionado. Si la respuesta no está en el contexto, di que no tienes esa información, pero que si afina la pregunta puede ser que sí. Sé conciso y útil."},
                     {"role": "user", "content": f"Contexto:\n{contexto}\n\nPregunta: {pregunta}"}
                 ],
-                temperature=0.7,
+                temperature=0.5,
                 max_tokens=500
             )
             
