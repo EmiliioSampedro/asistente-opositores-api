@@ -32,16 +32,22 @@ else:
 
 # Inicializar cliente OpenAI (bajo demanda)
 _cliente = None
+
 def get_openai_client():
     global _cliente
-    if _cliente is None and API_KEY:
+    if _cliente is None:
         try:
-            import httpx
+            # La forma MÁS SIMPLE de inicializar OpenAI v1.6.1
             _cliente = OpenAI(api_key=API_KEY)
-            logger.info("✅ Cliente OpenAI inicializado")
+            logger.info("✅ Cliente OpenAI inicializado correctamente")
         except Exception as e:
             logger.error(f"❌ Error inicializando OpenAI: {e}")
+            _cliente = None
     return _cliente
+
+# Inicializar cliente al arrancar
+if API_KEY:
+    get_openai_client()
 
 # --- CARGA DEL MODELO ---
 _modelo = None
