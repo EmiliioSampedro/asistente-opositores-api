@@ -1,74 +1,42 @@
 import os
-# Matar proxies (por si acaso)
-os.environ["HTTP_PROXY"] = ""
-os.environ["HTTPS_PROXY"] = ""
-os.environ["http_proxy"] = ""
-os.environ["https_proxy"] = ""
-
-# Importación SECUESTRADA - Forzamos a que no haya proxies
-import builtins
-original_import = builtins.__import__
-
-def patched_import(name, *args, **kwargs):
-    module = original_import(name, *args, **kwargs)
-    if name == 'openai':
-        # Parchear la clase OpenAI justo después de importar
-        if hasattr(module, 'OpenAI'):
-            original_init = module.OpenAI.__init__
-            def new_init(self, *args, **kwargs):
-                if 'proxies' in kwargs:
-                    print(f"🔪 Matando proxies en importación: {kwargs['proxies']}")
-                    del kwargs['proxies']
-                original_init(self, *args, **kwargs)
-            module.OpenAI.__init__ = new_init
-    return module
-
-builtins.__import__ = patched_import
-
-# AHORA importamos todo con el import secuestrado
 import pickle
 import numpy as np
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
 import openai
-from openai import OpenAI as OpenAIClient
 import logging
 import sys
 import gc
 import warnings
 warnings.filterwarnings("ignore")
 
-# Resto del código IGUAL que antes
+# === LIMPIEZA TOTAL (como al principio) ===
+os.environ["HTTP_PROXY"] = ""
+os.environ["HTTPS_PROXY"] = ""
+os.environ["http_proxy"] = ""
+os.environ["https_proxy"] = ""
 
-# === PARCHE ANTIPROXIES (el que funciona) ===
-original_init = openai.OpenAI.__init__
-def patched_init(self, *args, **kwargs):
-    if 'proxies' in kwargs:
-        print(f"🔪 Matando proxies: {kwargs['proxies']}")
-        del kwargs['proxies']
-    original_init(self, *args, **kwargs)
-openai.OpenAI.__init__ = patched_init
-
-
-
-# === CONFIGURACIÓN ===
+# === CONFIGURACIÓN BÁSICA (la que funcionaba) ===
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 load_dotenv()
 app = Flask(__name__)
-CORS(app, origins="*", allow_headers=["Content-Type"], methods=["POST", "OPTIONS", "GET"])
+CORS(app)
 logger.info("✅ CORS configurado")
 
+# === OPENAI SENCILLO (el que funcionaba) ===
 API_KEY = os.getenv("OPENAI_API_KEY")
 if not API_KEY:
     logger.error("❌ No hay API key")
     cliente_openai = None
 else:
     try:
-        cliente_openai = OpenAIClient(api_key=API_KEY)
-        logger.info("✅ OpenAI listo")
+        # La forma más simple que funcionó
+        openai.api_key = API_KEY
+        cliente_openai = openai
+        logger.info("✅ OpenAI listo (modo simple)")
     except Exception as e:
         logger.error(f"❌ Error OpenAI: {e}")
         cliente_openai = None
@@ -76,10 +44,7 @@ else:
 def get_openai_client():
     return cliente_openai
 
-if API_KEY:
-    get_openai_client()
-
-# === MODELO (con transformers neutralizado) ===
+# === MODELO PEQUEÑO (el que funcionaba) ===
 _modelo = None
 def get_model():
     global _modelo
@@ -87,13 +52,6 @@ def get_model():
         logger.info("🔄 Cargando modelo...")
         try:
             from sentence_transformers import SentenceTransformer
-            import transformers
-            # Matar agentes de OpenAI en transformers
-            if hasattr(transformers.tools, 'OpenAiAgent'):
-                transformers.tools.OpenAiAgent = None
-            if hasattr(transformers.tools, 'AzureOpenAiAgent'):
-                transformers.tools.AzureOpenAiAgent = None
-            
             _modelo = SentenceTransformer('paraphrase-MiniLM-L3-v2')
             logger.info("✅ Modelo cargado")
         except Exception as e:
@@ -105,14 +63,18 @@ logger.info("📚 Cargando datos...")
 fragmentos = []
 embeddings = []
 
-if os.path.exists("fragmentos.pkl") and os.path.exists("embeddings.pkl"):
+# Verificar archivos .pkl
+pkl_path = os.path.join(os.path.dirname(__file__), 'fragmentos.pkl')
+emb_path = os.path.join(os.path.dirname(__file__), 'embeddings.pkl')
+
+if os.path.exists(pkl_path) and os.path.exists(emb_path):
     logger.info("✅ Archivos .pkl encontrados")
     try:
-        with open("fragmentos.pkl", "rb") as f:
+        with open(pkl_path, "rb") as f:
             fragmentos = pickle.load(f)
         logger.info(f"   - {len(fragmentos)} fragmentos")
         
-        with open("embeddings.pkl", "rb") as f:
+        with open(emb_path, "rb") as f:
             embeddings = pickle.load(f)
         logger.info(f"   - {len(embeddings)} embeddings")
         
@@ -122,9 +84,9 @@ if os.path.exists("fragmentos.pkl") and os.path.exists("embeddings.pkl"):
         logger.error(f"❌ Error cargando .pkl: {e}")
 else:
     logger.error("❌ No hay .pkl")
-    logger.info(f"Archivos: {os.listdir('.')}")
+    logger.info(f"Archivos en directorio: {os.listdir('.')}")
 
-# === BÚSQUEDA ===
+# === BÚSQUEDA SIMPLE (la que funcionaba) ===
 def buscar_fragmentos(pregunta, top_k=5):
     if not fragmentos or len(embeddings) == 0:
         return []
@@ -148,16 +110,15 @@ def buscar_fragmentos(pregunta, top_k=5):
         logger.error(f"❌ Error búsqueda: {e}")
         return []
 
-# === RUTAS ===
+# === RUTAS (las que funcionaban) ===
 @app.route('/', methods=['GET'])
 def home():
     return jsonify({
         "status": "online",
-        "message": "Asistente Opositores (Versión Definitiva)",
+        "message": "Asistente Opositores (Versión Original)",
         "fragmentos": len(fragmentos),
         "modelo": _modelo is not None,
-        "openai": cliente_openai is not None,
-        "parche": "✅ activo"
+        "openai": cliente_openai is not None
     })
 
 @app.route('/debug', methods=['GET'])
@@ -190,13 +151,13 @@ def chat():
             return jsonify({"respuesta": "No encontré información."})
         
         contexto = "\n\n---\n\n".join(fragmentos_relevantes)
-        gc.collect()
         
         cliente = get_openai_client()
         if not cliente:
             return jsonify({"error": "OpenAI no disponible"}), 500
         
-        respuesta = cliente.chat.completions.create(
+        # Usar la API simple de openai (la que funcionaba)
+        respuesta = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": "Eres un asistente experto para opositores. Responde usando el contexto."},
