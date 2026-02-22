@@ -82,7 +82,7 @@ except Exception as e:
     logger.error(f"❌ Error cargando datos: {e}", exc_info=True)
 
 # --- FUNCIÓN DE BÚSQUEDA SEMÁNTICA ---
-def buscar_fragmentos(pregunta, top_k=3):
+def buscar_fragmentos(pregunta, top_k=5):
     """Busca los fragmentos más relevantes para la pregunta."""
     if not fragmentos or len(embeddings) == 0:
         logger.warning("⚠️ No hay fragmentos o embeddings cargados")
@@ -159,8 +159,9 @@ def chat():
         
         logger.info(f"📨 Procesando pregunta: {pregunta[:100]}...")
         
+
         # Buscar fragmentos relevantes
-        fragmentos_relevantes = buscar_fragmentos(pregunta)
+fragmentos_relevantes = buscar_fragmentos(pregunta, top_k=5)  # ← CAMBIO AQUÍ
         
         if not fragmentos_relevantes:
             logger.info("No se encontraron fragmentos relevantes")
@@ -182,14 +183,7 @@ def chat():
             respuesta = cliente.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
-    {"role": "system", "content": """Eres un asistente experto para opositores.
-
-INSTRUCCIONES IMPORTANTES:
-- El contexto contiene información relevante. ÚSALA.
-- Responde DIRECTAMENTE a la pregunta con la información del contexto.
-- Si el contexto dice "PDFs, Vídeos, Audios", responde "Se ofrecen PDFs, Vídeos, Audios y Apps".
-- NO digas que no tienes información si el contexto la contiene.
-- Sé natural y conversacional."""},
+   {"role": "system", "content": "Eres un asistente experto para opositores. Responde a la pregunta usando la información del contexto. Si el contexto contiene la respuesta, úsala directamente."},
     {"role": "user", "content": f"Contexto:\n{contexto}\n\nPregunta: {pregunta}"}
 ],
                 temperature=0.7,
@@ -197,6 +191,7 @@ INSTRUCCIONES IMPORTANTES:
             )
             
             respuesta_texto = respuesta.choices[0].message.content
+             gc.collect()
             logger.info("✅ Respuesta generada correctamente")
             
         except Exception as e:
