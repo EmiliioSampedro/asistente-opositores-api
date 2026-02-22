@@ -138,77 +138,53 @@ def debug():
 
 @app.route('/chat', methods=['POST', 'OPTIONS'])
 def chat():
-    # Manejar preflight OPTIONS - respuesta mínima
+    # Manejar preflight OPTIONS
     if request.method == 'OPTIONS':
-        return '', 200  # Respuesta vacía con código 200 es suficiente
-    try:
-        # Forzar limpieza de memoria antes de procesar
-        gc.collect()
-        
-        # Verificar datos de entrada
+        return '', 200
+    
+    try:  # ← Este try debe estar aquí
         data = request.json
         if not data:
-            logger.warning("Petición sin JSON")
             return jsonify({"error": "Formato JSON inválido"}), 400
             
         pregunta = data.get('pregunta', '').strip()
         
         if not pregunta:
-            logger.warning("Pregunta vacía")
             return jsonify({"error": "Pregunta vacía"}), 400
         
         logger.info(f"📨 Procesando pregunta: {pregunta[:100]}...")
         
-
-        # Buscar fragmentos relevantes
-fragmentos_relevantes = buscar_fragmentos(pregunta, top_k=5)  # ← CAMBIO AQUÍ
+        # Buscar fragmentos (AHORA CON TOP_K=5)
+        fragmentos_relevantes = buscar_fragmentos(pregunta, top_k=5)
         
         if not fragmentos_relevantes:
-            logger.info("No se encontraron fragmentos relevantes")
             return jsonify({"respuesta": "No encontré información relevante en los documentos."})
         
-        logger.info(f"✅ Encontrados {len(fragmentos_relevantes)} fragmentos relevantes")
-        
-        # Crear contexto con los fragmentos
+        # Crear contexto
         contexto = "\n\n---\n\n".join(fragmentos_relevantes)
         
         # Verificar cliente OpenAI
         if not cliente:
-            logger.error("Cliente OpenAI no disponible")
-            return jsonify({"error": "Error interno: cliente OpenAI no configurado"}), 500
+            return jsonify({"error": "Cliente OpenAI no configurado"}), 500
         
-        # Consultar a OpenAI
-        logger.info("🤖 Consultando a OpenAI...")
-        try:
-            respuesta = cliente.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-   {"role": "system", "content": "Eres un asistente experto para opositores. Responde a la pregunta usando la información del contexto. Si el contexto contiene la respuesta, úsala directamente."},
-    {"role": "user", "content": f"Contexto:\n{contexto}\n\nPregunta: {pregunta}"}
-],
-                temperature=0.7,
-                max_tokens=500
-            )
-            
-            respuesta_texto = respuesta.choices[0].message.content
-            
-            logger.info("✅ Respuesta generada correctamente")
-            
-        except Exception as e:
-            logger.error(f"❌ Error en OpenAI: {e}", exc_info=True)
-            return jsonify({"error": f"Error al consultar OpenAI: {str(e)}"}), 500
+        # Consultar a OpenAI con prompt mejorado
+        respuesta = cliente.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "Eres un asistente experto para opositores. Responde a la pregunta usando la información del contexto. Si el contexto contiene la respuesta, úsala directamente."},
+                {"role": "user", "content": f"Contexto:\n{contexto}\n\nPregunta: {pregunta}"}
+            ],
+            temperature=0.7,
+            max_tokens=500
+        )
         
-        # Limpiar memoria después de procesar
-        gc.collect()
+        respuesta_texto = respuesta.choices[0].message.content
         
-        return jsonify({
-            "respuesta": respuesta_texto,
-            "fragmentos_usados": len(fragmentos_relevantes)
-        })
+        return jsonify({"respuesta": respuesta_texto})
         
-    except Exception as e:
-        logger.error(f"❌ Error no controlado en /chat: {e}", exc_info=True)
-        return jsonify({"error": f"Error interno del servidor: {str(e)}"}), 500
+    except Exception as e:  # ← Este except debe estar aquí
+        logger.error(f"Error en /chat: {e}")
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
