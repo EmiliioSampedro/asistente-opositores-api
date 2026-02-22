@@ -152,53 +152,25 @@ def chat():
 
         contexto = "\n\n---\n\n".join(fragmentos_relevantes)
 
-        # ===== BLOQUE INTELIGENTE DE OPENAI (VERSIÓN 2.0) =====
-        respuesta_texto = ""
-        try:
-            # Opción 1: Sintaxis antigua (openai 0.28.1)
-            logger.info("🤖 Intentando con API antigua...")
-            respuesta = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "Eres un asistente para opositores. Responde usando el contexto."},
-                    {"role": "user", "content": f"Contexto:\n{contexto}\n\nPregunta: {pregunta}"}
-                ],
-                temperature=0.7,
-                max_tokens=400
-            )
-            respuesta_texto = respuesta.choices[0].message.content
-            logger.info("✅ Usada API antigua (openai 0.28.1)")
-        except (AttributeError, TypeError) as e:
-            # Opción 2: Sintaxis nueva (openai >=1.0.0) - Capturamos el error específico
-            try:
-                logger.info("🤖 Intentando con API nueva...")
-                from openai import OpenAI
-                # Asegurar que tenemos la clave
-                api_key = openai.api_key or os.getenv("OPENAI_API_KEY")
-                if not api_key:
-                    raise ValueError("No API key found")
-                cliente = OpenAI(api_key=api_key)
-                respuesta = cliente.chat.completions.create(
-                    model="gpt-3.5-turbo",
-                    messages=[
-                        {"role": "system", "content": "Eres un asistente para opositores. Responde usando el contexto."},
-                        {"role": "user", "content": f"Contexto:\n{contexto}\n\nPregunta: {pregunta}"}
-                    ],
-                    temperature=0.7,
-                    max_tokens=400
-                )
-                respuesta_texto = respuesta.choices[0].message.content
-                logger.info("✅ Usada API nueva (openai >=1.0.0)")
-            except Exception as e_inner:
-                logger.error(f"❌ También falló API nueva: {e_inner}")
-                return jsonify({"error": f"Error con API nueva: {str(e_inner)}"}), 500
-        except Exception as e_outer:
-            logger.error(f"❌ Error en API antigua: {e_outer}")
-            return jsonify({"error": f"Error con API antigua: {str(e_outer)}"}), 500
-        # ======================================================
+        # ===== BLOQUE PARA OPENAI MODERNO (v1.x) =====
+        from openai import OpenAI
+        # Asegurar que tenemos la clave
+        api_key = openai.api_key or os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            return jsonify({"error": "No API key found"}), 500
 
-        if not respuesta_texto:
-            return jsonify({"respuesta": "Lo siento, no pude generar una respuesta."})
+        cliente = OpenAI(api_key=api_key)
+        respuesta = cliente.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "Eres un asistente para opositores. Responde usando el contexto."},
+                {"role": "user", "content": f"Contexto:\n{contexto}\n\nPregunta: {pregunta}"}
+            ],
+            temperature=0.7,
+            max_tokens=400
+        )
+        respuesta_texto = respuesta.choices[0].message.content
+        # =============================================
 
         return jsonify({"respuesta": respuesta_texto})
 
