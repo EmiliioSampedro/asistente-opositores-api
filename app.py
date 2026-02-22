@@ -142,7 +142,10 @@ class DataLoader:
 data = DataLoader()
 
 # --- FUNCIÓN DE BÚSQUEDA SEMÁNTICA OPTIMIZADA ---
-def buscar_fragmentos(pregunta, top_k=7):
+def buscar_fragmentos(pregunta, top_k=5):
+    logger.info(f"🔍 Fragmentos encontrados: {len(fragmentos_relevantes)}")
+for i, frag in enumerate(fragmentos_relevantes[:3]):
+    logger.info(f"   Fragmento {i}: {frag[:150]}...")
     """Busca los fragmentos más relevantes usando operaciones vectorizadas"""
     if not data.fragmentos or len(data.embeddings) == 0:
         logger.warning("⚠️ No hay fragmentos o embeddings cargados")
