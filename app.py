@@ -134,57 +134,77 @@ def debug():
 def chat():
     if request.method == 'OPTIONS':
         return '', 200
-    
+
     try:
         data = request.json
         if not data:
             return jsonify({"error": "JSON inválido"}), 400
-            
+
         pregunta = data.get('pregunta', '').strip()
         if not pregunta:
             return jsonify({"error": "Pregunta vacía"}), 400
-        
-        logger.info(f"📨 {pregunta[:100]}...")
-        
+
+        logger.info(f"📨 Procesando: {pregunta[:100]}...")
+
         fragmentos_relevantes = buscar_fragmentos(pregunta, top_k=5)
         if not fragmentos_relevantes:
-            return jsonify({"respuesta": "No encontré información."})
-        
+            return jsonify({"respuesta": "No encontré información en mis documentos."})
+
         contexto = "\n\n---\n\n".join(fragmentos_relevantes)
-        
-        # === Código compatible con openai 0.28.1 y 1.x ===
+
+        # ===== BLOQUE INTELIGENTE DE OPENAI (VERSIÓN 2.0) =====
+        respuesta_texto = ""
         try:
-            # Intento con la sintaxis antigua (0.28.1)
+            # Opción 1: Sintaxis antigua (openai 0.28.1)
+            logger.info("🤖 Intentando con API antigua...")
             respuesta = openai.ChatCompletion.create(
                 model="gpt-3.5-turbo",
                 messages=[
-                    {"role": "system", "content": "Eres un asistente experto para opositores."},
+                    {"role": "system", "content": "Eres un asistente para opositores. Responde usando el contexto."},
                     {"role": "user", "content": f"Contexto:\n{contexto}\n\nPregunta: {pregunta}"}
                 ],
                 temperature=0.7,
                 max_tokens=400
             )
             respuesta_texto = respuesta.choices[0].message.content
-        except AttributeError:
-            # Si falla, usamos la sintaxis nueva (1.x)
-            from openai import OpenAI
-            cliente = OpenAI(api_key=openai.api_key)
-            respuesta = cliente.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "Eres un asistente experto para opositores."},
-                    {"role": "user", "content": f"Contexto:\n{contexto}\n\nPregunta: {pregunta}"}
-                ],
-                temperature=0.7,
-                max_tokens=400
-            )
-            respuesta_texto = respuesta.choices[0].message.content
-        
+            logger.info("✅ Usada API antigua (openai 0.28.1)")
+        except (AttributeError, TypeError) as e:
+            # Opción 2: Sintaxis nueva (openai >=1.0.0) - Capturamos el error específico
+            try:
+                logger.info("🤖 Intentando con API nueva...")
+                from openai import OpenAI
+                # Asegurar que tenemos la clave
+                api_key = openai.api_key or os.getenv("OPENAI_API_KEY")
+                if not api_key:
+                    raise ValueError("No API key found")
+                cliente = OpenAI(api_key=api_key)
+                respuesta = cliente.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": "Eres un asistente para opositores. Responde usando el contexto."},
+                        {"role": "user", "content": f"Contexto:\n{contexto}\n\nPregunta: {pregunta}"}
+                    ],
+                    temperature=0.7,
+                    max_tokens=400
+                )
+                respuesta_texto = respuesta.choices[0].message.content
+                logger.info("✅ Usada API nueva (openai >=1.0.0)")
+            except Exception as e_inner:
+                logger.error(f"❌ También falló API nueva: {e_inner}")
+                return jsonify({"error": f"Error con API nueva: {str(e_inner)}"}), 500
+        except Exception as e_outer:
+            logger.error(f"❌ Error en API antigua: {e_outer}")
+            return jsonify({"error": f"Error con API antigua: {str(e_outer)}"}), 500
+        # ======================================================
+
+        if not respuesta_texto:
+            return jsonify({"respuesta": "Lo siento, no pude generar una respuesta."})
+
         return jsonify({"respuesta": respuesta_texto})
-        
+
     except Exception as e:
-        logger.error(f"Error: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"Error en /chat: {e}", exc_info=True)
+        return jsonify({"error": f"Error interno: {str(e)}"}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
