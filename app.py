@@ -4,7 +4,8 @@ import numpy as np
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
-from openai import OpenAI
+import openai
+from openai import OpenAI as OpenAIClient
 import logging
 import sys
 import gc
@@ -31,7 +32,7 @@ if not API_KEY:
 else:
     try:
         # La forma MÁS SIMPLE posible - sin argumentos extra
-        cliente_openai = OpenAI(api_key=API_KEY)
+        cliente_openai = OpenAIClient(api_key=API_KEY)
         logger.info("✅ Cliente OpenAI inicializado correctamente")
     except Exception as e:
         logger.error(f"❌ Error inicializando OpenAI: {e}")
