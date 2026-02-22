@@ -152,22 +152,35 @@ def chat():
         
         contexto = "\n\n---\n\n".join(fragmentos_relevantes)
         
-        cliente = get_openai_client()
-        if not cliente:
-            return jsonify({"error": "OpenAI no disponible"}), 500
+        # === Código compatible con openai 0.28.1 y 1.x ===
+        try:
+            # Intento con la sintaxis antigua (0.28.1)
+            respuesta = openai.ChatCompletion.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "Eres un asistente experto para opositores."},
+                    {"role": "user", "content": f"Contexto:\n{contexto}\n\nPregunta: {pregunta}"}
+                ],
+                temperature=0.7,
+                max_tokens=400
+            )
+            respuesta_texto = respuesta.choices[0].message.content
+        except AttributeError:
+            # Si falla, usamos la sintaxis nueva (1.x)
+            from openai import OpenAI
+            cliente = OpenAI(api_key=openai.api_key)
+            respuesta = cliente.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "Eres un asistente experto para opositores."},
+                    {"role": "user", "content": f"Contexto:\n{contexto}\n\nPregunta: {pregunta}"}
+                ],
+                temperature=0.7,
+                max_tokens=400
+            )
+            respuesta_texto = respuesta.choices[0].message.content
         
-        # Usar la API simple de openai (la que funcionaba)
-        respuesta = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "Eres un asistente experto para opositores. Responde usando el contexto."},
-                {"role": "user", "content": f"Contexto:\n{contexto}\n\nPregunta: {pregunta}"}
-            ],
-            temperature=0.7,
-            max_tokens=400
-        )
-        
-        return jsonify({"respuesta": respuesta.choices[0].message.content})
+        return jsonify({"respuesta": respuesta_texto})
         
     except Exception as e:
         logger.error(f"Error: {e}", exc_info=True)
