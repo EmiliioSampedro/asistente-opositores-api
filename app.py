@@ -191,7 +191,7 @@ fragmentos_relevantes = buscar_fragmentos(pregunta, top_k=5)  # ← CAMBIO AQUÍ
             )
             
             respuesta_texto = respuesta.choices[0].message.content
-             gc.collect()
+            
             logger.info("✅ Respuesta generada correctamente")
             
         except Exception as e:
