@@ -27,23 +27,18 @@ logger.info("✅ CORS configurado")
 API_KEY = os.getenv("OPENAI_API_KEY")
 if not API_KEY:
     logger.error("❌ No se encuentra la API key de OpenAI")
+    cliente_openai = None
 else:
-    logger.info("✅ API key encontrada")
-
-# Inicializar cliente OpenAI (bajo demanda)
-_cliente = None
+    try:
+        # La forma MÁS SIMPLE posible - sin argumentos extra
+        cliente_openai = OpenAI(api_key=API_KEY)
+        logger.info("✅ Cliente OpenAI inicializado correctamente")
+    except Exception as e:
+        logger.error(f"❌ Error inicializando OpenAI: {e}")
+        cliente_openai = None
 
 def get_openai_client():
-    global _cliente
-    if _cliente is None:
-        try:
-            # La forma MÁS SIMPLE de inicializar OpenAI v1.6.1
-            _cliente = OpenAI(api_key=API_KEY)
-            logger.info("✅ Cliente OpenAI inicializado correctamente")
-        except Exception as e:
-            logger.error(f"❌ Error inicializando OpenAI: {e}")
-            _cliente = None
-    return _cliente
+    return cliente_openai
 
 # Inicializar cliente al arrancar
 if API_KEY:
