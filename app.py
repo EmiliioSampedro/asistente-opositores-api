@@ -1,58 +1,52 @@
 import os
-# Matar proxies
-os.environ["HTTP_PROXY"] = ""
-os.environ["HTTPS_PROXY"] = ""
-os.environ["http_proxy"] = ""
-os.environ["https_proxy"] = ""
-
-# Importación NORMAL de openai
-import openai
-
-# Parchear la clase después de importar (SIN RECURSIONES)
-original_init = openai.OpenAI.__init__
-
-def patched_init(self, *args, **kwargs):
-    if 'proxies' in kwargs:
-        print(f"🔪 Matando proxies: {kwargs['proxies']}")
-        del kwargs['proxies']
-    original_init(self, *args, **kwargs)
-
-openai.OpenAI.__init__ = patched_init
-
-# A partir de aquí, todo igual
 import pickle
 import numpy as np
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
-from openai import OpenAI as OpenAIClient
-import warnings
+import openai
 import logging
 import sys
 import gc
-
+import warnings
 warnings.filterwarnings("ignore")
 
+# === LIMPIEZA TOTAL ===
+os.environ["HTTP_PROXY"] = ""
+os.environ["HTTPS_PROXY"] = ""
+os.environ["http_proxy"] = ""
+os.environ["https_proxy"] = ""
+
+# === PARCHE ANTIPROXIES (el que funciona) ===
+original_init = openai.OpenAI.__init__
+def patched_init(self, *args, **kwargs):
+    if 'proxies' in kwargs:
+        print(f"🔪 Matando proxies: {kwargs['proxies']}")
+        del kwargs['proxies']
+    original_init(self, *args, **kwargs)
+openai.OpenAI.__init__ = patched_init
+
+from openai import OpenAI as OpenAIClient
+
+# === CONFIGURACIÓN ===
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 load_dotenv()
-
 app = Flask(__name__)
-
 CORS(app, origins="*", allow_headers=["Content-Type"], methods=["POST", "OPTIONS", "GET"])
 logger.info("✅ CORS configurado")
 
 API_KEY = os.getenv("OPENAI_API_KEY")
 if not API_KEY:
-    logger.error("❌ No se encuentra la API key de OpenAI")
+    logger.error("❌ No hay API key")
     cliente_openai = None
 else:
     try:
         cliente_openai = OpenAIClient(api_key=API_KEY)
-        logger.info("✅ Cliente OpenAI inicializado correctamente")
+        logger.info("✅ OpenAI listo")
     except Exception as e:
-        logger.error(f"❌ Error inicializando OpenAI: {e}")
+        logger.error(f"❌ Error OpenAI: {e}")
         cliente_openai = None
 
 def get_openai_client():
@@ -61,6 +55,7 @@ def get_openai_client():
 if API_KEY:
     get_openai_client()
 
+# === MODELO (con transformers neutralizado) ===
 _modelo = None
 def get_model():
     global _modelo
@@ -68,13 +63,21 @@ def get_model():
         logger.info("🔄 Cargando modelo...")
         try:
             from sentence_transformers import SentenceTransformer
+            import transformers
+            # Matar agentes de OpenAI en transformers
+            if hasattr(transformers.tools, 'OpenAiAgent'):
+                transformers.tools.OpenAiAgent = None
+            if hasattr(transformers.tools, 'AzureOpenAiAgent'):
+                transformers.tools.AzureOpenAiAgent = None
+            
             _modelo = SentenceTransformer('paraphrase-MiniLM-L3-v2')
             logger.info("✅ Modelo cargado")
         except Exception as e:
-            logger.error(f"❌ Error: {e}")
+            logger.error(f"❌ Error modelo: {e}")
     return _modelo
 
-logger.info("📚 CARGANDO DATOS AL INICIO...")
+# === DATOS ===
+logger.info("📚 Cargando datos...")
 fragmentos = []
 embeddings = []
 
@@ -83,25 +86,23 @@ if os.path.exists("fragmentos.pkl") and os.path.exists("embeddings.pkl"):
     try:
         with open("fragmentos.pkl", "rb") as f:
             fragmentos = pickle.load(f)
-        logger.info(f"   - fragmentos.pkl cargado: {len(fragmentos)} fragmentos")
+        logger.info(f"   - {len(fragmentos)} fragmentos")
         
         with open("embeddings.pkl", "rb") as f:
             embeddings = pickle.load(f)
-        logger.info(f"   - embeddings.pkl cargado: {len(embeddings)} embeddings")
+        logger.info(f"   - {len(embeddings)} embeddings")
         
         if not isinstance(embeddings, np.ndarray):
             embeddings = np.array(embeddings)
-            logger.info("   - embeddings convertidos a numpy array")
-            
     except Exception as e:
-        logger.error(f"❌ Error cargando archivos .pkl: {e}", exc_info=True)
+        logger.error(f"❌ Error cargando .pkl: {e}")
 else:
-    logger.error("❌ No se encuentran los archivos .pkl en el directorio actual")
-    logger.info(f"   Archivos presentes: {os.listdir('.')}")
+    logger.error("❌ No hay .pkl")
+    logger.info(f"Archivos: {os.listdir('.')}")
 
+# === BÚSQUEDA ===
 def buscar_fragmentos(pregunta, top_k=5):
     if not fragmentos or len(embeddings) == 0:
-        logger.warning("⚠️ No hay datos cargados")
         return []
     
     try:
@@ -110,7 +111,6 @@ def buscar_fragmentos(pregunta, top_k=5):
             return []
         
         emb_pregunta = modelo.encode(pregunta)
-        
         similitudes = []
         for i, emb in enumerate(embeddings):
             sim = np.dot(emb_pregunta, emb) / (np.linalg.norm(emb_pregunta) * np.linalg.norm(emb))
@@ -118,31 +118,30 @@ def buscar_fragmentos(pregunta, top_k=5):
         
         similitudes.sort(key=lambda x: x[1], reverse=True)
         indices = [i for i, _ in similitudes[:top_k]]
-        
         logger.info(f"🔍 Top similitud: {similitudes[0][1]:.4f}")
         return [fragmentos[i] for i in indices]
-    
     except Exception as e:
-        logger.error(f"❌ Error en búsqueda: {e}", exc_info=True)
+        logger.error(f"❌ Error búsqueda: {e}")
         return []
 
+# === RUTAS ===
 @app.route('/', methods=['GET'])
 def home():
     return jsonify({
         "status": "online",
-        "message": "Asistente Opositores API (Versión Simplificada)",
-        "fragmentos_cargados": len(fragmentos),
-        "modelo_cargado": _modelo is not None,
-        "openai_ok": API_KEY is not None,
-        "plan": "Render 2GB"
+        "message": "Asistente Opositores (Versión Definitiva)",
+        "fragmentos": len(fragmentos),
+        "modelo": _modelo is not None,
+        "openai": cliente_openai is not None,
+        "parche": "✅ activo"
     })
 
 @app.route('/debug', methods=['GET'])
 def debug():
     return jsonify({
         "fragmentos": len(fragmentos),
-        "embeddings": len(embeddings) if isinstance(embeddings, list) else embeddings.shape[0] if hasattr(embeddings, 'shape') else 0,
-        "modelo_cargado": _modelo is not None,
+        "embeddings": len(embeddings),
+        "modelo": _modelo is not None,
         "archivos": os.listdir('.')[:10]
     })
 
@@ -154,21 +153,19 @@ def chat():
     try:
         data = request.json
         if not data:
-            return jsonify({"error": "Formato JSON inválido"}), 400
+            return jsonify({"error": "JSON inválido"}), 400
             
         pregunta = data.get('pregunta', '').strip()
         if not pregunta:
             return jsonify({"error": "Pregunta vacía"}), 400
         
-        logger.info(f"📨 Pregunta: {pregunta[:100]}...")
+        logger.info(f"📨 {pregunta[:100]}...")
         
         fragmentos_relevantes = buscar_fragmentos(pregunta, top_k=5)
-        
         if not fragmentos_relevantes:
-            return jsonify({"respuesta": "No encontré información relevante."})
+            return jsonify({"respuesta": "No encontré información."})
         
         contexto = "\n\n---\n\n".join(fragmentos_relevantes)
-        
         gc.collect()
         
         cliente = get_openai_client()
@@ -178,7 +175,7 @@ def chat():
         respuesta = cliente.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "Eres un asistente experto para opositores. Responde usando la información del contexto."},
+                {"role": "system", "content": "Eres un asistente experto para opositores. Responde usando el contexto."},
                 {"role": "user", "content": f"Contexto:\n{contexto}\n\nPregunta: {pregunta}"}
             ],
             temperature=0.7,
