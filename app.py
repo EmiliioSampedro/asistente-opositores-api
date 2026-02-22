@@ -1,4 +1,9 @@
 import os
+# Matar proxies
+os.environ["HTTP_PROXY"] = ""
+os.environ["HTTPS_PROXY"] = ""
+os.environ["http_proxy"] = ""
+os.environ["https_proxy"] = ""
 import pickle
 import numpy as np
 from flask import Flask, request, jsonify
@@ -6,9 +11,26 @@ from flask_cors import CORS
 from dotenv import load_dotenv
 import openai
 from openai import OpenAI as OpenAIClient
+import warnings
 import logging
 import sys
 import gc
+
+warnings.filterwarnings("ignore")
+
+# INTERVENCIÓN DIRECTA: Parcheamos la clase OpenAI para que ignore 'proxies'
+original_init = openai.OpenAI.__init__
+
+def patched_init(self, *args, **kwargs):
+    # Eliminar el argumento 'proxies' si existe (el fantasma)
+    if 'proxies' in kwargs:
+        print(f"🔪 Matando proxies: {kwargs['proxies']}")
+        del kwargs['proxies']
+    # Llamar al init original
+    original_init(self, *args, **kwargs)
+
+# Aplicar el parche
+openai.OpenAI.__init__ = patched_init
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -56,7 +78,7 @@ def get_model():
             _modelo = SentenceTransformer('paraphrase-MiniLM-L3-v2')
             logger.info("✅ Modelo cargado")
         except Exception as e:
-            logger.error(f"❌ Error cargando modelo: {e}")
+            logger.error(f"❌ Error: {e}")
     return _modelo
 
 # --- CARGA DE FRAGMENTOS Y EMBEDDINGS (SIMPLIFICADA) ---
@@ -135,7 +157,7 @@ def debug():
         "fragmentos": len(fragmentos),
         "embeddings": len(embeddings) if isinstance(embeddings, list) else embeddings.shape[0] if hasattr(embeddings, 'shape') else 0,
         "modelo_cargado": _modelo is not None,
-        "archivos": os.listdir('.')[:10]  # Primeros 10 archivos en directorio
+        "archivos": os.listdir('.')[:10]
     })
 
 @app.route('/chat', methods=['POST', 'OPTIONS'])
@@ -160,6 +182,9 @@ def chat():
             return jsonify({"respuesta": "No encontré información relevante."})
         
         contexto = "\n\n---\n\n".join(fragmentos_relevantes)
+        
+        # Limpiar memoria antes de usar OpenAI
+        gc.collect()
         
         cliente = get_openai_client()
         if not cliente:
